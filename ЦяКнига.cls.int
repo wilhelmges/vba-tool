@@ -1,0 +1,463 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "ЦяКнига"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = True
+Attribute VB_Exposed = True
+Sub GetDataFromSQL2()
+
+    ' --- Отримання параметрів з Листа 1 ---
+    Dim wsParams As Worksheet
+    Dim wsResult As Worksheet
+    Dim DateStart As Date
+    Dim DateEnd As Date
+    Dim IPN As String
+    Dim PIB_VS As String
+    
+    Call DeleteRowsWithValuesInColumnA("Дод 8")
+    Call DeleteRowsWithValuesInColumnA("Дод 24")
+    
+    Set wsParams = ThisWorkbook.Sheets("Дані ПІБ,№,дати")
+    Set wsResult = ThisWorkbook.Sheets("Дод 8")
+    Set wsResult24 = ThisWorkbook.Sheets("Дод 24")
+    Set wsResultROZ = ThisWorkbook.Sheets("Розшифровка")
+    Set wsResultVp = ThisWorkbook.Sheets("Виплати")
+
+    
+    ' Припустимо, що параметри знаходяться в:
+    ' A2 – Дата початку, B2 – Дата завершення, C2 – ІПН
+    DateStart = wsParams.Range("B2").Value
+    DateEnd = wsParams.Range("B3").Value
+    IPN = wsParams.Range("B1").Value
+    
+    ' --- Приведення дат до початку і кінця дня ---
+    DateStart = DateSerial(Year(DateStart), Month(DateStart), Day(DateStart)) + TimeSerial(0, 0, 0)
+    DateEnd = DateSerial(Year(DateEnd), Month(DateEnd), Day(DateEnd)) + TimeSerial(23, 59, 59)
+    
+    ' --- Параметри підключення до SQL Server ---
+    Dim conn As Object
+    Dim rs As Object
+    Dim sConnString As String
+    Dim sqlQuery As String
+    
+    sConnString = "Provider=SQLOLEDB;" & _
+                  "Data Source=DellServer;" & _
+                  "Initial Catalog=FES;" & _
+                  "User ID=FES_R;" & _
+                  "Password=Fes_User4007;"
+    
+    ' ДОВІДКА 8
+    
+    Set conn = CreateObject("ADODB.Connection")
+    Set rs = CreateObject("ADODB.Recordset")
+    
+    conn.Open sConnString
+    
+     ' --- Формуємо SQL-запит ---
+    sqlQuery = "SELECT PeriodNarah as Period,  Sum(NOPS) as NOPS , Sum(NZRTD) as NZRTD, Sum(Premiya) as Premiya " & _
+          "FROM RPV " & _
+          "WHERE (IPN = '" & IPN & "' " & _
+          "OR IPN in (SELECT IPN_Rod from IPN_VS_Rod WHERE IPN_VS= '" & IPN & "')) " & _
+          "AND PeriodNarah BETWEEN '" & format(DateStart, "yyyy-MM-ddTHH:mm:ss") & _
+          "' AND '" & format(DateEnd, "yyyy-MM-ddTHH:mm:ss") & "' " & _
+          "Group by  PeriodNarah " & _
+          "ORDER BY PeriodNarah;"
+    
+    ' Используем команду с параметром
+    Dim cmd As Object
+    Set cmd = CreateObject("ADODB.Command")
+    cmd.ActiveConnection = conn
+    cmd.CommandText = sqlQuery
+    cmd.CommandType = 1 ' adCmdText
+ 
+    ' Выполняем команду
+    Set rs = cmd.Execute
+   
+    ' --- Початковий рядок для виводу ---
+    Dim rowIndex As Long
+    Dim Firstrow As Long
+    Firstrow = 22
+    rowIndex = Firstrow
+    
+    ' --- Якщо є записи ---
+    If Not rs.EOF Then
+        Do While Not rs.EOF
+            
+            ' Якщо не перший запис — вставити новий рядок і зсунути таблицю вниз
+            If rowIndex > Firstrow Then
+                'wsResult.Rows(rowIndex).Insert Shift:=xlDown ' вставляє рядок без формул
+                wsResult.Rows(rowIndex - 1).Copy
+                wsResult.Rows(rowIndex).Insert Shift:=xlDown
+                Application.CutCopyMode = False
+            End If
+            
+            ' --- Явне присвоєння значень у потрібні колонки ---
+            wsResult.Cells(rowIndex, 1).Value = rs.Fields("Period").Value      ' Колонка A
+            wsResult.Cells(rowIndex, 5).Value = rs.Fields("NOPS").Value      ' Колонка E
+            wsResult.Cells(rowIndex, 6).Value = rs.Fields("NZRTD").Value      ' Колонка F
+            wsResult.Cells(rowIndex, 8).Value = rs.Fields("Premiya").Value      ' Колонка H
+            ' --- Наступний запис ---
+            rs.MoveNext
+            rowIndex = rowIndex + 1
+        Loop
+        
+        ' виправляємо формули Дно
+        wsResult.Range("E" & rowIndex).Formula = "=SUM(E" & Firstrow & ":E" & (rowIndex - 1) & ")"
+        wsResult.Range("F" & rowIndex).Formula = "=SUM(F" & Firstrow & ":F" & (rowIndex - 1) & ")"
+        wsResult.Range("G" & rowIndex).Formula = "=SUM(G" & Firstrow & ":G" & (rowIndex - 1) & ")"
+        wsResult.Range("H" & rowIndex).Formula = "=SUM(H" & Firstrow & ":H" & (rowIndex - 1) & ")"
+        wsResult.Range("I" & rowIndex).Formula = "=SUM(I" & Firstrow & ":I" & (rowIndex - 1) & ")"
+    Else
+        MsgBox "Запит для Довідка8 не повернув жодного запису.", vbInformation
+    End If
+    ' ДОВІДКА 8 КІНЕЦЬ
+    
+    ' ДОВІДКА 24
+     sqlQuery = "SELECT PeriodNarah as Period,  MAX(NVR_Vidsotok) as NVR_Vidsotok , Sum(OVZ) as OVZ, Sum(POklad) as POklad, " & _
+          "Sum(NVR) as NVR, Sum(NOPS) as NOPS, MAX(DT_Vidsotok) as DT_Vidsotok, Sum(NZRTD) as NZRTD, MAX(RP_Vidsotok) as RP_Vidsotok, Sum(Premiya) as Premiya " & _
+          "FROM RPV " & _
+          "WHERE (IPN = '" & IPN & "' " & _
+          "OR IPN in (SELECT IPN_Rod from IPN_VS_Rod WHERE IPN_VS= '" & IPN & "')) " & _
+          "AND PeriodNarah BETWEEN '" & format(DateStart, "yyyy-MM-ddTHH:mm:ss") & _
+          "' AND '" & format(DateEnd, "yyyy-MM-ddTHH:mm:ss") & "' " & _
+          "Group by  PeriodNarah " & _
+          "ORDER BY PeriodNarah;"
+    
+    
+    Dim cmd24 As Object
+    Set cmd24 = CreateObject("ADODB.Command")
+    cmd24.ActiveConnection = conn
+    cmd24.CommandText = sqlQuery
+    cmd24.CommandType = 1 ' adCmdText
+   
+    ' Выполняем команду
+    Set rs = cmd24.Execute
+    
+     ' --- Початковий рядок для виводу ---
+    Dim rowIndex24 As Long
+    Dim Firstrow24 As Long
+    Firstrow24 = 18
+    rowIndex24 = Firstrow24
+    
+    ' --- Якщо є записи ---
+    If Not rs.EOF Then
+        Do While Not rs.EOF
+            
+            ' Якщо не перший запис — вставити новий рядок і зсунути таблицю вниз
+            If rowIndex24 > Firstrow24 Then
+                wsResult24.Rows(rowIndex24 - 1).Copy
+                wsResult24.Rows(rowIndex24).Insert Shift:=xlDown
+                Application.CutCopyMode = False
+            End If
+            
+            ' --- Явне присвоєння значень у потрібні колонки ---
+            wsResult24.Cells(rowIndex24, 1).Value = rs.Fields("Period").Value         ' Колонка A
+            wsResult24.Cells(rowIndex24, 7).Value = rs.Fields("POklad").Value         ' Колонка G
+            wsResult24.Cells(rowIndex24, 8).Value = rs.Fields("OVZ").Value            ' Колонка H
+            wsResult24.Cells(rowIndex24, 9).Value = rs.Fields("NVR_Vidsotok").Value / 100 ' Колонка I
+            wsResult24.Cells(rowIndex24, 10).Value = rs.Fields("NVR").Value           ' Колонка J
+            wsResult24.Cells(rowIndex24, 12).Value = rs.Fields("NOPS").Value           ' Колонка L
+            wsResult24.Cells(rowIndex24, 13).Value = rs.Fields("DT_Vidsotok").Value / 100  ' Колонка M
+            wsResult24.Cells(rowIndex24, 14).Value = rs.Fields("NZRTD").Value         ' Колонка N
+            wsResult24.Cells(rowIndex24, 19).Value = rs.Fields("RP_Vidsotok").Value / 100  ' Колонка S
+            wsResult24.Cells(rowIndex24, 20).Value = rs.Fields("Premiya").Value       ' Колонка T
+            
+            
+            ' --- Наступний запис ---
+            rs.MoveNext
+            rowIndex24 = rowIndex24 + 1
+        Loop
+        
+        ' виправляємо формули Дно
+        wsResult24.Range("G" & rowIndex24).Formula = "=SUM(G" & Firstrow24 & ":G" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("H" & rowIndex24).Formula = "=SUM(H" & Firstrow24 & ":H" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("J" & rowIndex24).Formula = "=SUM(J" & Firstrow24 & ":J" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("N" & rowIndex24).Formula = "=SUM(N" & Firstrow24 & ":N" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("T" & rowIndex24).Formula = "=SUM(T" & Firstrow24 & ":T" & (rowIndex24 - 1) & ")"
+        ' нульові, поки не заповнені
+        wsResult24.Range("L" & rowIndex24).Formula = "=SUM(L" & Firstrow24 & ":L" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("P" & rowIndex24).Formula = "=SUM(P" & Firstrow24 & ":P" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("R" & rowIndex24).Formula = "=SUM(R" & Firstrow24 & ":R" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("W" & rowIndex24).Formula = "=SUM(W" & Firstrow24 & ":W" & (rowIndex24 - 1) & ")"
+        wsResult24.Range("W" & (rowIndex24 + 1)).Formula = "=ROUND(W" & rowIndex24 & "/C" & (rowIndex24 - 1) & ",2)"
+    
+    Else
+        MsgBox "Запит для Довідка24 не повернув жодного запису.", vbInformation
+    End If
+    ' ДОВІДКА 24 КІНЕЦЬ
+    
+    ' РОЗШИФРОВКА
+    
+    sqlQuery = "SELECT * " & _
+          "FROM RPV " & _
+          "WHERE (IPN = '" & IPN & "' " & _
+          "OR IPN in (SELECT IPN_Rod from IPN_VS_Rod WHERE IPN_VS= '" & IPN & "')) " & _
+          "AND PeriodNarah BETWEEN '" & format(DateStart, "yyyy-MM-ddTHH:mm:ss") & _
+          "' AND '" & format(DateEnd, "yyyy-MM-ddTHH:mm:ss") & "' " & _
+          "ORDER BY PeriodNarah;"
+    
+    Dim cmdROZ As Object
+    Set cmdROZ = CreateObject("ADODB.Command")
+    cmdROZ.ActiveConnection = conn
+    cmdROZ.CommandText = sqlQuery
+    cmdROZCommandType = 1 ' adCmdText
+   
+    ' Выполняем команду
+    Set rs = cmdROZ.Execute
+    wsResultROZ.Rows("8:" & wsResultROZ.Rows.count).ClearContents
+    'wsResultROZ.Cells.Clear
+
+    ' дані
+    'wsResultROZ.Range("A8").CopyFromRecordset rs
+    ' в рядку 7 знаходиться шаблон налаштувань комірок, тому додаємо рядок після 7го та заповнюємо його
+    Dim rowIndexROZ As Long
+    rowIndexROZ = 8 'перший рядок
+    
+    PIB_VS = ""
+    
+    ' --- Якщо є записи ---
+    If Not rs.EOF Then
+        Do While Not rs.EOF
+            
+            ' Якщо не перший запис — вставити новий рядок і зсунути таблицю вниз
+            wsResultROZ.Rows(rowIndexROZ - 1).Copy
+            wsResultROZ.Rows(rowIndexROZ).Insert Shift:=xlDown
+            Application.CutCopyMode = False
+            
+            ' --- Явне присвоєння значень у потрібні колонки ---
+            wsResultROZ.Cells(rowIndexROZ, "B").Value = rs.Fields("Period").Value
+            wsResultROZ.Cells(rowIndexROZ, "C").Value = rs.Fields("PeriodNarah").Value
+            wsResultROZ.Cells(rowIndexROZ, "D").Value = rs.Fields("TypeRPV").Value
+            wsResultROZ.Cells(rowIndexROZ, "E").Value = rs.Fields("NumRPV").Value
+            wsResultROZ.Cells(rowIndexROZ, "F").Value = rs.Fields("FileName").Value
+            wsResultROZ.Cells(rowIndexROZ, "G").Value = rs.Fields("Author").Value
+            wsResultROZ.Cells(rowIndexROZ, "H").Value = rs.Fields("RowNumber").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "I").Value = rs.Fields("IPN").Value
+            wsResultROZ.Cells(rowIndexROZ, "J").Value = rs.Fields("Posada").Value
+            wsResultROZ.Cells(rowIndexROZ, "K").Value = rs.Fields("zvannya").Value
+            wsResultROZ.Cells(rowIndexROZ, "L").Value = rs.Fields("PIB").Value
+            wsResultROZ.Cells(rowIndexROZ, "M").Value = rs.Fields("VysluhaRokivR").Value
+            wsResultROZ.Cells(rowIndexROZ, "N").Value = rs.Fields("VysluhaRokivM").Value
+            wsResultROZ.Cells(rowIndexROZ, "O").Value = rs.Fields("VysluhaRokivD").Value
+            wsResultROZ.Cells(rowIndexROZ, "P").Value = rs.Fields("NVR_Vidsotok").Value
+            wsResultROZ.Cells(rowIndexROZ, "Q").Value = rs.Fields("BMI").Value
+            wsResultROZ.Cells(rowIndexROZ, "R").Value = rs.Fields("OVZB").Value
+            wsResultROZ.Cells(rowIndexROZ, "S").Value = rs.Fields("OVZ").Value
+            wsResultROZ.Cells(rowIndexROZ, "T").Value = rs.Fields("TR").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "U").Value = rs.Fields("POkladB").Value
+            wsResultROZ.Cells(rowIndexROZ, "V").Value = rs.Fields("POklad").Value
+            wsResultROZ.Cells(rowIndexROZ, "W").Value = rs.Fields("NVR").Value
+            wsResultROZ.Cells(rowIndexROZ, "X").Value = rs.Fields("NOPS").Value
+            wsResultROZ.Cells(rowIndexROZ, "Y").Value = rs.Fields("DT_Vidsotok").Value
+            wsResultROZ.Cells(rowIndexROZ, "Z").Value = rs.Fields("NZRTD").Value
+            wsResultROZ.Cells(rowIndexROZ, "AA").Value = rs.Fields("NZBSShR").Value
+            wsResultROZ.Cells(rowIndexROZ, "AB").Value = rs.Fields("RP_Vidsotok").Value
+            wsResultROZ.Cells(rowIndexROZ, "AC").Value = rs.Fields("Premiya").Value
+            wsResultROZ.Cells(rowIndexROZ, "AD").Value = rs.Fields("Kor_GZ").Value
+            wsResultROZ.Cells(rowIndexROZ, "AE").Value = rs.Fields("Kor_OVZ").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "AF").Value = rs.Fields("Kor_POklad").Value
+            wsResultROZ.Cells(rowIndexROZ, "AG").Value = rs.Fields("Kor_NVR").Value
+            wsResultROZ.Cells(rowIndexROZ, "AH").Value = rs.Fields("Kor_NOPS").Value
+            wsResultROZ.Cells(rowIndexROZ, "AI").Value = rs.Fields("Kor_NZRTD").Value
+            wsResultROZ.Cells(rowIndexROZ, "AJ").Value = rs.Fields("Kor_Premiya").Value
+            wsResultROZ.Cells(rowIndexROZ, "AK").Value = rs.Fields("GDO_ZV").Value 'Грошова допомога на оздоровлення (при звільненні)
+            wsResultROZ.Cells(rowIndexROZ, "AL").Value = rs.Fields("MD_ZV").Value 'Матеріальна допомога для вирішення соціально-побутових питань (при звільненні)
+            wsResultROZ.Cells(rowIndexROZ, "AM").Value = rs.Fields("GZ_ZV").Value
+            wsResultROZ.Cells(rowIndexROZ, "AN").Value = rs.Fields("OGD_ZV").Value
+            wsResultROZ.Cells(rowIndexROZ, "AO").Value = rs.Fields("DV").Value
+            wsResultROZ.Cells(rowIndexROZ, "AP").Value = rs.Fields("Kor_DV").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "AQ").Value = rs.Fields("DV_70").Value
+            wsResultROZ.Cells(rowIndexROZ, "AR").Value = rs.Fields("DV_20100").Value
+            wsResultROZ.Cells(rowIndexROZ, "AS").Value = rs.Fields("DOKV_VRB").Value
+            wsResultROZ.Cells(rowIndexROZ, "AT").Value = rs.Fields("DnP").Value
+            wsResultROZ.Cells(rowIndexROZ, "AU").Value = rs.Fields("InshNarah").Value
+            wsResultROZ.Cells(rowIndexROZ, "AV").Value = rs.Fields("Indeksatsiya").Value
+            wsResultROZ.Cells(rowIndexROZ, "AW").Value = rs.Fields("All_COUNTED").Value
+            wsResultROZ.Cells(rowIndexROZ, "AX").Value = rs.Fields("PDFO").Value
+            wsResultROZ.Cells(rowIndexROZ, "AY").Value = rs.Fields("VZ").Value
+            wsResultROZ.Cells(rowIndexROZ, "AZ").Value = rs.Fields("Kor_VZ").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "BA").Value = rs.Fields("VykV_Vidsotok").Value
+            wsResultROZ.Cells(rowIndexROZ, "BB").Value = rs.Fields("VykV").Value
+            wsResultROZ.Cells(rowIndexROZ, "BC").Value = rs.Fields("All_HELD").Value
+            wsResultROZ.Cells(rowIndexROZ, "BD").Value = rs.Fields("PlusGZtimeLBZ").Value
+            wsResultROZ.Cells(rowIndexROZ, "BE").Value = rs.Fields("MinusGZtimeLBZ").Value
+            wsResultROZ.Cells(rowIndexROZ, "BF").Value = rs.Fields("PlusFuLminZP").Value
+            wsResultROZ.Cells(rowIndexROZ, "BG").Value = rs.Fields("MinusFuLminZP").Value
+            wsResultROZ.Cells(rowIndexROZ, "BH").Value = rs.Fields("ESV").Value
+            wsResultROZ.Cells(rowIndexROZ, "BI").Value = rs.Fields("GKZPD").Value
+            wsResultROZ.Cells(rowIndexROZ, "BJ").Value = rs.Fields("NaBank1").Value
+            wsResultROZ.Cells(rowIndexROZ, "BK").Value = rs.Fields("NaBank2").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "BL").Value = rs.Fields("DoVidachi").Value
+            wsResultROZ.Cells(rowIndexROZ, "BM").Value = rs.Fields("NomReestra").Value
+            wsResultROZ.Cells(rowIndexROZ, "BN").Value = rs.Fields("IPN").Value
+            wsResultROZ.Cells(rowIndexROZ, "BO").Value = rs.Fields("PIB").Value
+            wsResultROZ.Cells(rowIndexROZ, "BP").Value = rs.Fields("Days").Value
+            wsResultROZ.Cells(rowIndexROZ, "BS").Value = rs.Fields("DayNa30").Value
+            wsResultROZ.Cells(rowIndexROZ, "BT").Value = rs.Fields("DayNa100").Value
+            wsResultROZ.Cells(rowIndexROZ, "BU").Value = rs.Fields("DayPilga").Value
+            
+            wsResultROZ.Cells(rowIndexROZ, "BV").Value = rs.Fields("OznakaBank").Value
+            wsResultROZ.Cells(rowIndexROZ, "BW").Value = rs.Fields("Surname").Value
+            wsResultROZ.Cells(rowIndexROZ, "BX").Value = rs.Fields("Name").Value
+            wsResultROZ.Cells(rowIndexROZ, "BY").Value = rs.Fields("MiddleName").Value
+            wsResultROZ.Cells(rowIndexROZ, "BZ").Value = rs.Fields("CodePidrozdil").Value
+            wsResultROZ.Cells(rowIndexROZ, "CA").Value = rs.Fields("Note1").Value
+            wsResultROZ.Cells(rowIndexROZ, "CB").Value = rs.Fields("Note2").Value
+            wsResultROZ.Cells(rowIndexROZ, "CC").Value = rs.Fields("Note3").Value
+            wsResultROZ.Cells(rowIndexROZ, "CD").Value = rs.Fields("Note4").Value
+            wsResultROZ.Cells(rowIndexROZ, "CE").Value = rs.Fields("Note5").Value
+            
+            PIB_VS = trim(rs.Fields("Surname").Value & " " & rs.Fields("Name").Value & " " & rs.Fields("MiddleName").Value)
+           
+            ' --- Наступний запис ---
+            rs.MoveNext
+            rowIndexROZ = rowIndexROZ + 1
+        Loop
+        
+        wsParams.Cells(4, "B").Value = PIB_VS
+        Call vidmtest
+    Else
+        MsgBox "Запит для Розшифровки не повернув жодного запису.", vbInformation
+    End If
+        
+        
+        
+    '[DATE_VP],[NUM_VP], [ZV_MIS],[TYPE_VP],[BANK],[IPN],[CARD_NUM],[SUM],[TYPE_SUM],[DEST],[NOTE],[PIB]   FROM [FES].[dbo].[VP_BANK]
+    ' Виплати
+    
+    sqlQuery = "SELECT [DATE_VP], [NUM_VP], [ZV_MIS],[TYPE_VP],[BANK],[IPN],[CARD_NUM],[SUM],[TYPE_SUM],[DEST],[NOTE],[PIB] " & _
+          "FROM [FES].[dbo].[VP_BANK] " & _
+          "WHERE IPN ='" & IPN & _
+          "' AND [DATE_VP] BETWEEN '" & format(DateStart, "yyyy-MM-ddTHH:mm:ss") & _
+          "' AND '" & format(DateEnd, "yyyy-MM-ddTHH:mm:ss") & "' " & _
+          "ORDER BY [DATE_VP];"
+          
+    Debug.Print sqlQuery
+    'MsgBox sqlQuery, vbInformation
+    'wsRezultVp.Range("A2").Value = sqlQuery '
+    
+    
+    Dim cmdVp As Object
+    Set cmdVp = CreateObject("ADODB.Command")
+    With cmdVp
+     .ActiveConnection = conn
+     .CommandText = sqlQuery
+     .CommandType = 1 ' adCmdText, вказівка ADO виконувати CommandText як SQL-запит
+    
+     ' Виконуємо команду
+     Set rs = .Execute
+    End With
+    
+    If rs.EOF Then
+        Debug.Print "Запит на виплати не повернув жодного запису"
+    Else
+        Call PrepareVpSheet
+        Debug.Print 'починаємо заповнення виплат'
+        rowIndexVp = 2 'починаємо заповнення листа з другого рядку
+        Do While Not rs.EOF
+            ' --- Явне присвоєння значень у потрібні колонки ---
+            With wsResultVp
+                .Cells(rowIndexVp, 1).Value = rs.Fields("DATE_VP").Value
+                .Cells(rowIndexVp, 2).Value = rs.Fields("NUM_VP").Value
+                .Cells(rowIndexVp, 3).Value = rs.Fields("ZV_MIS").Value
+                .Cells(rowIndexVp, 4).Value = rs.Fields("TYPE_VP").Value
+                .Cells(rowIndexVp, 5).Value = rs.Fields("BANK").Value
+                .Cells(rowIndexVp, 6).Value = rs.Fields("IPN").Value
+                .Cells(rowIndexVp, 7).Value = rs.Fields("PIB").Value
+                .Cells(rowIndexVp, 8).Value = rs.Fields("CARD_NUM").Value
+                .Cells(rowIndexVp, 9).Value = rs.Fields("SUM").Value
+                .Cells(rowIndexVp, 10).Value = rs.Fields("TYPE_SUM").Value
+                .Cells(rowIndexVp, 11).Value = rs.Fields("DEST").Value
+                .Cells(rowIndexVp, 12).Value = rs.Fields("NOTE").Value
+            End With
+            'Debug.Print rs.Fields("DATE_VP").Value
+            rs.MoveNext
+            rowIndexVp = rowIndexVp + 1
+        Loop
+    End If
+    
+        
+    ' --- Закриття підключення ---
+    rs.Close
+    conn.Close
+    Set rs = Nothing
+    Set conn = Nothing
+    
+    MsgBox "Дані успішно завантажені!", vbInformation
+
+End Sub
+
+
+Sub DeleteRowsWithValuesInColumnA(sheetName As String)
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim firstNonEmptyRow As Long
+    Dim cellValue As Variant
+    
+    ' ?? Вкажіть аркуш (можна змінити на потрібний)
+    Set ws = ThisWorkbook.Sheets(sheetName)
+    
+    ' Знаходимо останній рядок у колонці A
+    lastRow = ws.Cells(ws.Rows.count, "A").End(xlUp).Row
+    
+    firstNonEmptyRow = 0
+    
+    ' Ідемо зверху вниз, щоб знайти перший рядок з даними у колонці A
+    For i = 1 To lastRow
+        cellValue = ws.Cells(i, "A").Value
+        If Not IsEmpty(cellValue) And cellValue <> "" Then
+            firstNonEmptyRow = i
+            Exit For
+        End If
+    Next i
+    
+    ' Якщо знайдено перший рядок, видаляємо всі інші знизу вгору
+    If firstNonEmptyRow > 0 Then
+        For i = lastRow To 1 Step -1
+            If i <> firstNonEmptyRow Then
+                cellValue = ws.Cells(i, "A").Value
+                If Not IsEmpty(cellValue) And cellValue <> "" Then
+                    ws.Rows(i).Delete
+                End If
+            End If
+        Next i
+    End If
+    
+    'MsgBox "Видалення завершено.", vbInformation
+End Sub
+
+Sub PrepareVpSheet()
+    ThisWorkbook.Worksheets("Виплати").Cells.ClearContents
+    
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets("Виплати")
+
+    With ws
+        .Range("A1").Value = "Дата виписки"
+        .Range("B1").Value = "№ виписки"
+        .Range("C1").Value = "Звітний місяць"
+        .Range("D1").Value = "Тип виплати"
+        .Range("E1").Value = "БАНК"
+        .Range("F1").Value = "ІПН"
+        .Range("G1").Value = "ПІБ"
+        .Range("H1").Value = "Картка"
+        .Range("I1").Value = "Сума"
+        .Range("J1").Value = "Тип"
+        .Range("K1").Value = "Призначення"
+        .Range("L1").Value = "Примітка"
+    End With
+
+End Sub
+
+
+
